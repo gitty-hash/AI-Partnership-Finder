@@ -1,0 +1,1 @@
+# waresport-partnerships-finder
