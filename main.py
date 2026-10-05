@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Waresport Partnership Finder.
 
-Finds Waresport's competitors (club/facility management software), then
+Finds Waresport's competitors (club/facility management software), and then
 collects each competitor's own partners/integrations along with a contact
 email for every partner, and writes the result to a CSV you can open in Excel.
 
@@ -38,6 +38,7 @@ Usage:
 import argparse
 from datetime import date
 from pathlib import Path
+import sys
 
 from finder.pipeline import DEFAULT_MAX_PER_COMPETITOR, DEFAULT_TARGET_COMPETITORS, run
 
