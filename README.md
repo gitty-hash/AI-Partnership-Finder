@@ -6,7 +6,7 @@ Finds partnership leads for [Waresport](https://www.waresport.com) (sports club 
 2. **Collects** each competitor's partners and integrations, with a contact email for every partner, and saves them as a CSV and a Google Sheet.
 3. **Drafts and sends** a researched, personalized partnership email to each partner, after a human approves it.
 
-It runs locally on your machine, and everything can be scheduled to run twice a week.
+It runs locally on your machine, and everything is scheduled to run twice a week.(any day of week)
 
 ## How it works
 
