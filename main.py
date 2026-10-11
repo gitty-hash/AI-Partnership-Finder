@@ -35,10 +35,12 @@ Usage:
     python main.py --no-enrich            # skip email lookup, just list
                                           # competitors+partners fast
 """
+print('Waresport Partnership Finder Starting up...')
 import argparse
 from datetime import date
 from pathlib import Path
-import sys
+import os
+
 
 from finder.pipeline import DEFAULT_MAX_PER_COMPETITOR, DEFAULT_TARGET_COMPETITORS, run
 
@@ -55,7 +57,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--max-competitors", type=int, default=DEFAULT_TARGET_COMPETITORS,
-        help="How many competitors (each with at least one unique partner/integration) to collect (default: %(default)s)",
+        help="How many competitors (each with atleast one unique partner/integration) to collect (default: %(default)s)",
     )
     parser.add_argument(
         "--max-per-competitor", type=int, default=DEFAULT_MAX_PER_COMPETITOR,
