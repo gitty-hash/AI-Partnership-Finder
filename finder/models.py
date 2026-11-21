@@ -32,7 +32,11 @@ class Partner:
     source_url: str = ""            # the competitor's own page describing the integration
     website: str = ""               # the partner company's own site (may be empty if unresolved)
     website_confidence: str = ""    # "known" | "llm_picked" | "guessed" | ""
-    fit: str = ""                   # "niche_vertical" | "horizontal_platform" | ""
+    # Partner type from the fit scorer: "niche_vertical" | "horizontal_platform" |
+    # "customer" | "competitor" | "other" | "" (not scored).
+    fit: str = ""
+    fit_score: int | None = None    # 0-100: how good a Waresport partnership prospect this is
+    fit_reason: str = ""
     contact_page: str = ""
     emails: list = field(default_factory=list)
     # "verified_found": scraped/extracted from a real page.
@@ -41,7 +45,13 @@ class Partner:
     # "not_found": exhausted all sources, not even a pattern guess was possible
     #   (no resolved website to build a guess from).
     email_confidence: str = ""
+    # Where the email came from: "page" | "search_snippet" | "page_llm" | "web_search" | "guess" | "known".
+    email_source: str = ""
     notes: str = ""
+    # Lead memory (finder/lead_store.py), filled in at export time.
+    is_new: bool = True
+    first_seen: str = ""
+    lead_status: str = ""
 
     def dedupe_key(self) -> tuple:
         """Global (cross-competitor) company identity. Two rows are the same
@@ -64,6 +74,8 @@ class Partner:
             "partner_name": self.name,
             "category": self.category or "Unspecified",
             "fit": self.fit,
+            "fit_score": "" if self.fit_score is None else self.fit_score,
+            "fit_reason": self.fit_reason,
             "description": self.description or "(no description available from source)",
             "website": self.website,
             "website_confidence": self.website_confidence,
@@ -72,6 +84,10 @@ class Partner:
         for i in range(3):
             row[f"email_{i + 1}"] = emails[i] if i < len(emails) else ""
         row["email_confidence"] = self.email_confidence
+        row["email_source"] = self.email_source
         row["source_url"] = self.source_url
+        row["is_new"] = "yes" if self.is_new else "no"
+        row["first_seen"] = self.first_seen
+        row["lead_status"] = self.lead_status
         row["notes"] = self.notes
         return row

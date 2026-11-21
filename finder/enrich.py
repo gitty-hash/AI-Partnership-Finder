@@ -10,33 +10,34 @@ per partner):
      need JS rendering -- with the same regex extraction.
   3. A web search (DuckDuckGo first) for "<company> contact email" -- often
      the search snippet itself contains a real email. Only emails on the
-     partner's own domain are accepted from snippets, so a stray address
-     from some unrelated page can't be attributed to the partner.
-  4. page_fetch on the homepage + OpenAI reading the fetched text for a real
-     email -- still only ever an email that's actually present in the page,
-     never invented.
-  5. OpenAI's own hosted web_search tool searches and reads pages itself -- a
-     genuinely independent attempt from whatever was already tried.
+     partner's own domain are accepted from snippets.
+  4. page_fetch on the homepage + OpenAI reading the fetched text -- the
+     address must literally appear in that text, or it is thrown away.
+  5. OpenAI's own hosted web_search tool -- only accepted when the address is
+     on the partner's own domain (we can't see the page it came from).
   6. If nothing real turns up anywhere, fall back to a standard-convention
-     guess (info@domain) so the CSV cell isn't blank -- always labeled
-     "pattern_guess" via email_confidence, never presented as verified.
+     guess (info@domain) -- only for a domain that can receive mail, and
+     always labeled "pattern_guess", never presented as verified.
+
+Every address is checked for deliverability (the domain has MX/A records, see
+email_verify.py) before it is kept, and each partner records where its email
+came from (`email_source`: page | search_snippet | page_llm | web_search | guess).
 
 Never submits forms or logs in -- read-only at every step.
 """
 import re
 import time
 from urllib.parse import urljoin, urlparse
-from urllib.robotparser import RobotFileParser
 
 import requests
 from bs4 import BeautifulSoup
 
-from . import page_fetch
+from . import email_verify, page_fetch, robots
 from .llm_select import llm_client as openai_client
 from .models import Partner, registrable_domain
 from .search import web_search
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; WaresportPartnershipFinder/0.1)"}
+HEADERS = {"User-Agent": robots.USER_AGENT}
 TIMEOUT = 12
 
 # Negative lookbehind/lookahead excludes both word chars AND backslash from the
@@ -55,20 +56,8 @@ JUNK_EMAIL_SUBSTRINGS = (
 CONTACT_LINK_WORDS = ("contact", "get in touch", "reach us", "partnerships", "partner with us")
 
 
-def _allowed_by_robots(url: str) -> bool:
-    parsed = urlparse(url)
-    robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
-    rp = RobotFileParser()
-    try:
-        rp.set_url(robots_url)
-        rp.read()
-    except Exception:
-        return True  # no robots.txt or unreadable -> assume allowed
-    return rp.can_fetch(HEADERS["User-Agent"], url)
-
-
 def _fetch(url: str) -> str | None:
-    if not _allowed_by_robots(url):
+    if not robots.allowed(url):
         return None
     try:
         resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
@@ -78,14 +67,20 @@ def _fetch(url: str) -> str | None:
         return None
 
 
+def _is_junk(email: str) -> bool:
+    low = email.lower()
+    return any(j in low for j in JUNK_EMAIL_SUBSTRINGS)
+
+
 def _extract_emails(html: str) -> set[str]:
-    found = set()
-    for m in EMAIL_RE.findall(html):
-        low = m.lower()
-        if any(j in low for j in JUNK_EMAIL_SUBSTRINGS):
-            continue
-        found.add(m)
-    return found
+    return {m for m in EMAIL_RE.findall(html or "") if not _is_junk(m)}
+
+
+def _prefer_own_domain(emails: set[str], website: str) -> set[str]:
+    """Pages often show third-party addresses (an agency's, a platform's support
+    inbox). When the company's own domain is among them, keep only those."""
+    own = {e for e in emails if email_verify.same_company(e, website)}
+    return own or emails
 
 
 def _find_contact_link(soup: BeautifulSoup, base_url: str) -> str:
@@ -171,70 +166,76 @@ def _fetch_and_llm_fallback(partner: Partner) -> set[str]:
                 break
 
     result = openai_client.extract_contact_email(partner.name, partner.website, text)
-    email = result.get("email")
-    if email and "@" in email:
-        low = email.lower()
-        if not any(j in low for j in JUNK_EMAIL_SUBSTRINGS):
-            return {email}
+    email = (result.get("email") or "").strip()
+    # The model may only report an address that is actually in the page text.
+    if email and "@" in email and not _is_junk(email) and email_verify.appears_in(email, text):
+        return {email}
     return set()
 
 
 def _openai_web_search_fallback(partner: Partner) -> set[str]:
     """Last resort before a pattern guess: OpenAI's own hosted web_search
-    tool searches and reads pages itself, independent of whatever was
-    already tried -- a genuinely separate attempt, not just re-processing
-    the same fetched content again."""
+    tool searches and reads pages itself. We can't see the page it read, so
+    the address is only trusted when it is on the partner's own domain."""
     if not openai_client.available():
         return set()
     result = openai_client.find_contact_email_via_web_search(partner.name, partner.website)
-    email = result.get("email")
+    email = (result.get("email") or "").strip()
     if not partner.contact_page and result.get("contact_page"):
         partner.contact_page = result["contact_page"]
-    if email and "@" in email:
-        low = email.lower()
-        if not any(j in low for j in JUNK_EMAIL_SUBSTRINGS):
-            return {email}
+    if email and "@" in email and not _is_junk(email) and email_verify.same_company(email, partner.website):
+        return {email}
     return set()
 
 
+def _deliverable(emails: set[str]) -> set[str]:
+    return {e for e in emails if email_verify.deliverable(e)}
+
+
+def _append_note(partner: Partner, note: str) -> None:
+    partner.notes = (partner.notes + " " if partner.notes else "") + note
+
+
+TIERS = (
+    ("page", _free_crawl),
+    ("page", _contact_paths_crawl),
+    ("search_snippet", _search_snippet_search),
+    ("page_llm", _fetch_and_llm_fallback),
+    ("web_search", _openai_web_search_fallback),
+)
+
+
 def enrich(partner: Partner, delay: float = 1.5) -> None:
-    """Mutates partner.contact_page / partner.emails / partner.email_confidence
-    / partner.notes in place, walking the escalation chain described above."""
+    """Mutates partner.contact_page / emails / email_confidence / email_source /
+    notes in place, walking the escalation chain described above."""
     if not partner.website:
         partner.email_confidence = "not_found"
-        partner.notes = (partner.notes + " " if partner.notes else "") + "No resolved website to look up contact info from."
+        _append_note(partner, "No resolved website to look up contact info from.")
         return
 
-    emails = _free_crawl(partner)
-
-    if not emails:
-        emails = _contact_paths_crawl(partner)
-
-    if not emails:
-        emails = _search_snippet_search(partner)
-
-    if not emails:
-        time.sleep(delay)
-        emails = _fetch_and_llm_fallback(partner)
-
-    if not emails:
-        emails = _openai_web_search_fallback(partner)
-
-    if emails:
-        partner.emails = sorted(emails)
-        partner.email_confidence = "verified_found"
-        return
+    rejected: set[str] = set()
+    for source, tier in TIERS:
+        if source == "page_llm":
+            time.sleep(delay)
+        found = _prefer_own_domain(tier(partner), partner.website)
+        emails = _deliverable(found)
+        rejected |= found - emails
+        if emails:
+            partner.emails = sorted(emails, key=lambda e: (not email_verify.same_company(e, partner.website), e.lower()))
+            partner.email_confidence = "verified_found"
+            partner.email_source = source
+            if rejected:
+                _append_note(partner, f"Dropped undeliverable address(es): {', '.join(sorted(rejected))}.")
+            return
 
     # Nothing real found anywhere -- fall back to a labeled convention guess
-    # rather than leaving the cell blank.
+    # rather than leaving the cell blank, but only for a domain that takes mail.
     domain = _root_domain(partner.website)
-    if domain:
+    if domain and email_verify.domain_accepts_mail(domain) is not False:
         partner.emails = [f"info@{domain}"]
         partner.email_confidence = "pattern_guess"
-        partner.notes = (
-            (partner.notes + " " if partner.notes else "")
-            + "No public email found on the site -- info@<domain> is a convention guess, NOT verified. Confirm before outreach."
-        )
+        partner.email_source = "guess"
+        _append_note(partner, "No public email found on the site -- info@<domain> is a convention guess, NOT verified. Confirm before outreach.")
     else:
         partner.email_confidence = "not_found"
-        partner.notes = (partner.notes + " " if partner.notes else "") + "No public email found and no usable domain to guess from."
+        _append_note(partner, "No public email found and the domain can't receive email." if domain else "No public email found and no usable domain to guess from.")

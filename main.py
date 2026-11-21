@@ -34,15 +34,19 @@ Usage:
                                           # addition to what the LLM finds
     python main.py --no-enrich            # skip email lookup, just list
                                           # competitors+partners fast
+    python main.py --only-new             # sheet lists only partners no
+                                          # earlier run has found
+
+Every run is remembered in data/leads.db (lead memory): each row of the sheet
+says whether the partner is new, when it was first seen and where outreach
+stands, and verified emails from earlier runs are reused instead of re-crawled.
 """
-print('Waresport Partnership Finder Starting up...')
+
 import argparse
 from datetime import date
 from pathlib import Path
-import os
 
-
-from finder.pipeline import DEFAULT_MAX_PER_COMPETITOR, DEFAULT_TARGET_COMPETITORS, run
+from finder.pipeline import DEFAULT_ENRICH_WORKERS, DEFAULT_MAX_PER_COMPETITOR, DEFAULT_TARGET_COMPETITORS, run
 
 
 def main() -> None:
@@ -66,7 +70,13 @@ def main() -> None:
     parser.add_argument("--no-enrich", action="store_true", help="Skip contact/email discovery")
     parser.add_argument("--no-drive", action="store_true", help="Don't upload the finished sheet to Google Drive")
     parser.add_argument("--delay", type=float, default=1.5, help="Seconds to wait between requests to any one site (politeness)")
-    parser.add_argument("--out", type=Path, default=None, help="Output CSV path (default: output/leads_<date>.csv)")
+    parser.add_argument("--out", type=Path, default=None,
+                        help="Output CSV path (default: output/leads_<date>.csv; a second run the same day writes leads_<date>_1.csv)")
+    parser.add_argument("--only-new", action="store_true", help="Only put partners that no earlier run found in the sheet")
+    parser.add_argument("--no-memory", action="store_true",
+                        help="Don't read or update the lead memory (data/leads.db): every partner counts as new")
+    parser.add_argument("--workers", type=int, default=DEFAULT_ENRICH_WORKERS,
+                        help="Partners whose contacts are looked up at the same time (default: %(default)s)")
     args = parser.parse_args()
 
     out_path = args.out or Path("output") / f"leads_{date.today().isoformat()}.csv"
@@ -80,6 +90,10 @@ def main() -> None:
         max_competitors=args.max_competitors,
         max_per_competitor=args.max_per_competitor,
         upload_to_drive=not args.no_drive,
+        only_new=args.only_new,
+        use_memory=not args.no_memory,
+        workers=args.workers,
+        overwrite=args.out is not None,
     )
 
 

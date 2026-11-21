@@ -287,7 +287,7 @@ def scrape_integrations_page(
                 source_url=page_url,
                 website=website,
                 website_confidence=confidence,
-                fit="niche_vertical",
+                # fit / fit_score are set later by fit.score_partners, once per competitor.
                 notes=f"Discovered via {_SCRAPE_PROVIDER_LABEL} fetch + {_LLM_PROVIDER_LABEL} extraction -- verify before outreach.",
             )
         )

@@ -148,6 +148,14 @@ def extract_partners(competitor_name: str, page_markdown: str) -> list[dict]:
     return [p for p in partners if isinstance(p, dict) and p.get("name")]
 
 
+def score_partner_fit(product_description: str, competitor_name: str, partners: list[dict]) -> list[dict]:
+    """Same contract as openai_client.score_partner_fit (prompt shared, only the transport differs)."""
+    from . import openai_client as _oa
+    if not partners:
+        return []
+    return _oa.parse_fit_result(_json_call(*_oa.build_fit_prompt(product_description, competitor_name, partners)))
+
+
 def describe_company(company_name: str, website: str, page_text: str) -> str:
     system = (
         "You write short, factual descriptions of what a company does and who it serves. "

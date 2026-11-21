@@ -1,44 +1,31 @@
 """Fetches a page's readable text + links, preferring the free path.
 
-Tries a plain `requests` GET (respecting robots.txt) first -- free, fast, no
-rate limit, and works for the large majority of server-rendered pages. Only
-falls back to Firecrawl's scrape (which handles JS-rendered pages and basic
-anti-bot measures) when the free fetch fails outright or comes back
-suspiciously thin (a strong signal the page needs JS to render). Keeping
-Firecrawl call volume low this way, combined with firecrawl_client.py's
-built-in rate limiting/caching/retry, is what keeps this within Firecrawl's
-free-tier limits -- most "read this page" work is handled for free, and only
-JS-heavy pages actually reach Firecrawl.
+Tries a plain `requests` GET first -- free, fast, no rate limit, and works for
+the large majority of server-rendered pages. Only falls back to Firecrawl's
+scrape (which handles JS-rendered pages and basic anti-bot measures) when the
+free fetch fails outright or comes back suspiciously thin (a strong signal the
+page needs JS to render). Keeping Firecrawl call volume low this way, combined
+with firecrawl_client.py's rate limiting/caching/retry, keeps this within
+Firecrawl's free-tier limits.
+
+robots.txt is respected on BOTH paths: a page the site disallows is not fetched
+for free and is not handed to Firecrawl either (finder/robots.py).
 """
 import re
-from urllib.parse import urljoin, urlparse
-from urllib.robotparser import RobotFileParser
+from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
 
+from . import robots
 from .scrape_select import scrape_client as firecrawl_client
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; WaresportPartnershipFinder/0.1)"}
+HEADERS = {"User-Agent": robots.USER_AGENT}
 TIMEOUT = 12
 MIN_USEFUL_CHARS = 300  # below this, assume the page needs JS and fall back to Firecrawl
 
 
-def _allowed_by_robots(url: str) -> bool:
-    parsed = urlparse(url)
-    robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
-    rp = RobotFileParser()
-    try:
-        rp.set_url(robots_url)
-        rp.read()
-    except Exception:
-        return True  # no robots.txt or unreadable -> assume allowed
-    return rp.can_fetch(HEADERS["User-Agent"], url)
-
-
 def _free_fetch(url: str) -> dict | None:
-    if not _allowed_by_robots(url):
-        return None
     try:
         resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
     except requests.RequestException:
@@ -61,7 +48,10 @@ def _free_fetch(url: str) -> dict | None:
 def fetch(url: str) -> dict | None:
     """Returns {"markdown": str, "links": list[str]}: the free path if it got
     enough content, Firecrawl as fallback for JS-rendered/blocked pages,
-    otherwise whatever the free path got (even if thin) beats nothing."""
+    otherwise whatever the free path got (even if thin) beats nothing.
+    None when the page doesn't exist or robots.txt disallows it."""
+    if not robots.allowed(url):
+        return None
     free = _free_fetch(url)
     if free and free.get("not_found"):
         return None

@@ -233,6 +233,60 @@ def extract_partners(competitor_name: str, page_markdown: str) -> list[dict]:
     return [p for p in partners if isinstance(p, dict) and p.get("name")]
 
 
+FIT_TYPES = ("niche_vertical", "horizontal_platform", "customer", "competitor", "other")
+
+
+def build_fit_prompt(product_description: str, competitor_name: str, partners: list[dict]) -> tuple[str, str]:
+    """(system, user) prompt for score_partner_fit; shared with gemini_client."""
+    system = (
+        "You are a partnerships strategist. Score how promising each company is as a PARTNERSHIP "
+        "prospect for the product described (integration, co-marketing, referrals or reselling to its "
+        "clubs). Judge only from the information given; do not invent facts.\n"
+        "type: niche_vertical = a sports/club/facility-specific vendor or service (best fit); "
+        "horizontal_platform = a large general-purpose platform (payments, email, Google, Zapier...); "
+        "customer = a club, team, league, association or school (a customer, not a partner); "
+        "competitor = itself club/league management software; other = anything else.\n"
+        "score 0-100: 80+ strong, specific fit; 50-79 plausible; 20-49 weak; under 20 not a partner "
+        "(customers and competitors are always under 20). reason: one short sentence."
+    )
+    listing = "\n".join(
+        f"- {p.get('name', '')} | category: {p.get('category') or 'unknown'} | {(p.get('description') or '')[:200]} | {p.get('website') or ''}"
+        for p in partners
+    )
+    user = (
+        f"PRODUCT: {product_description}\n\nThese companies were listed as partners/integrations of {competitor_name}:\n{listing}\n\n"
+        'Respond as JSON: {"partners": [{"name": "...", "type": "niche_vertical", "score": 75, "reason": "..."}]}'
+    )
+    return system, user
+
+
+def parse_fit_result(result: dict | None) -> list[dict]:
+    """Validated [{"name", "type", "score", "reason"}] from the model's JSON."""
+    if not result:
+        return []
+    out = []
+    for item in result.get("partners", []) or []:
+        if not isinstance(item, dict) or not item.get("name"):
+            continue
+        try:
+            score = max(0, min(100, int(item.get("score"))))
+        except (TypeError, ValueError):
+            continue
+        type_ = item.get("type") if item.get("type") in FIT_TYPES else "other"
+        out.append({"name": str(item["name"]).strip(), "type": type_, "score": score, "reason": str(item.get("reason", "")).strip()[:300]})
+    return out
+
+
+def score_partner_fit(product_description: str, competitor_name: str, partners: list[dict]) -> list[dict]:
+    """Scores a whole competitor's partner list in ONE call (cheaper and more
+    consistent than one call per partner). Each partner is
+    {"name", "category", "description", "website"}; returns
+    [{"name", "type", "score", "reason"}] in any order (matched by name)."""
+    if not partners:
+        return []
+    return parse_fit_result(_json_call(*build_fit_prompt(product_description, competitor_name, partners)))
+
+
 def describe_company(company_name: str, website: str, page_text: str) -> str:
     """One or two plain sentences on what a company does and who it serves,
     grounded in its own homepage text when we have it. Returns "" if the
