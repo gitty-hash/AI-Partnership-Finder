@@ -31,6 +31,14 @@ def web_search(query: str, limit: int = 5) -> list[dict]:
     if not results and firecrawl_client.available():
         results = firecrawl_client.search(query, limit=limit)
 
+    # Search backends (and old cached results) can return null fields; callers
+    # rely on every field being a string.
+    results = [
+        {"title": r.get("title") or "", "url": r["url"], "description": r.get("description") or ""}
+        for r in results
+        if r.get("url")
+    ]
+
     if results:
         _cache[key] = results
     return results
