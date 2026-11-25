@@ -17,23 +17,11 @@ found"), so calls are paced and a failed query is retried once before giving
 up. Degrades gracefully (returns []) if the package isn't installed or the
 search keeps failing.
 """
-import threading
 import time
 
 _MIN_INTERVAL_SECONDS = 1.0
 _RETRY_DELAY_SECONDS = 2.5
 _last_call_at = 0.0
-# Contact lookups run in parallel threads; the pacing gate must be shared, not per thread.
-_pace_lock = threading.Lock()
-
-
-def _wait_turn() -> None:
-    global _last_call_at
-    with _pace_lock:
-        wait = _MIN_INTERVAL_SECONDS - (time.monotonic() - _last_call_at)
-        if wait > 0:
-            time.sleep(wait)
-        _last_call_at = time.monotonic()
 
 
 def available() -> bool:
@@ -48,6 +36,7 @@ def search(query: str, max_results: int = 8) -> list[dict]:
     """Returns [{"title", "url", "snippet"}, ...]. Never raises -- any
     failure (network, rate limit, parsing) just yields an empty list so
     callers can carry on without this source."""
+    global _last_call_at
     try:
         from ddgs import DDGS
     except ImportError:
@@ -56,7 +45,10 @@ def search(query: str, max_results: int = 8) -> list[dict]:
 
     raw = None
     for attempt in range(2):
-        _wait_turn()
+        wait = _MIN_INTERVAL_SECONDS - (time.monotonic() - _last_call_at)
+        if wait > 0:
+            time.sleep(wait)
+        _last_call_at = time.monotonic()
         try:
             raw = DDGS().text(query, max_results=max_results)
             break

@@ -20,7 +20,6 @@ Everything cited is traceable: the drafts CSV records the research summary, the
 analysis and the source URLs next to each email so a human can check them.
 """
 import json
-import os
 import re
 from urllib.parse import urlparse
 
@@ -185,20 +184,9 @@ def analyze(name: str, facts: dict) -> dict | None:
 
 
 # ---- 4. Write ---------------------------------------------------------------
-def _sender_line() -> str:
-    """Who the email is from, taken from the same .env values as the signature, so
-    the body and the signature can never disagree (and no name is hardcoded)."""
-    name = os.environ.get("OUTREACH_SENDER_NAME", "").strip()
-    title = os.environ.get("OUTREACH_SENDER_TITLE", "").strip()
-    company = os.environ.get("OUTREACH_COMPANY", "Waresport").strip() or "Waresport"
-    if name and title:
-        return f"{name}, {title} at {company}"
-    return f"{name} at {company}" if name else f"the partnerships team at {company}"
+_WRITE_SYSTEM = """You are a senior B2B partnerships marketer with 20+ years of experience in sports and club management software. You write genuine, well-reasoned business pitches that earn replies -- never mass-mailing copy.
 
-
-_WRITE_SYSTEM_TEMPLATE = """You are a senior B2B partnerships marketer with 20+ years of experience in sports and club management software. You write genuine, well-reasoned business pitches that earn replies -- never mass-mailing copy.
-
-Write one partnership email from {sender}, to the target brand, from the research and analysis provided.
+Write one partnership email from Sharaan Thayanithi, Senior Sales Agent at Waresport, to the target brand, from the research and analysis provided.
 
 Requirements:
 - Subject: under 60 characters, specific to them (their name or what they do), never the generic "Partnership Opportunity with Waresport".
@@ -212,10 +200,6 @@ Requirements:
 - Greet them as "Hi <Brand Name> team,". Do NOT write a sign-off, signature, postal address or unsubscribe text -- those are added automatically. The Waresport website is the only web address allowed in the body."""
 
 
-def write_system_prompt() -> str:
-    return _WRITE_SYSTEM_TEMPLATE.replace("{sender}", _sender_line())
-
-
 def write(name: str, facts: dict, plan: dict, feedback: str = "") -> dict | None:
     user = (
         f"WARESPORT FACTS:\n{WARESPORT_FACTS}\n\nTARGET BRAND: {name}\nFACT SHEET:\n{_fact_sheet_text(facts)}\n\n"
@@ -223,7 +207,7 @@ def write(name: str, facts: dict, plan: dict, feedback: str = "") -> dict | None
         + (f"\nYour previous draft was rejected: {feedback}. Rewrite it and fix that.\n" if feedback else "")
         + '\nRespond as JSON: {"subject": "...", "body": "..."}'
     )
-    return llm_client._json_call(write_system_prompt(), user, max_chars=LONG_INPUT)
+    return llm_client._json_call(_WRITE_SYSTEM, user, max_chars=LONG_INPUT)
 
 
 # ---- 5. Verify --------------------------------------------------------------

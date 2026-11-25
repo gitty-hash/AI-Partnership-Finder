@@ -27,7 +27,7 @@ import smtplib
 import ssl
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, make_msgid
 from pathlib import Path
@@ -39,8 +39,7 @@ except ImportError:
     pass
 
 from . import deep_dive, page_fetch
-from .fit import BIG_PLATFORM_DOMAINS
-from .lead_store import NO_OUTREACH_STATUSES
+from .discovery import WARESPORT_DESCRIPTION
 from .llm_select import llm_client
 from .models import registrable_domain
 
@@ -51,14 +50,8 @@ SUPPRESSION_FILE = OUTREACH_DIR / "suppression.txt"
 DRAFT_FIELDS = [
     "approved", "to_email", "partner_name", "partner_website", "competitor_name",
     "email_confidence", "subject", "body", "status", "research_summary", "analysis", "sources",
-    # Follow-ups: "initial" | "follow_up_1" | "follow_up_2"; threaded onto the earlier message.
-    "kind", "in_reply_to", "backup_emails",
 ]
-SENT_LOG_FIELDS = [
-    "sent_at", "to_email", "partner_name", "partner_domain", "competitor_name", "subject", "status", "error",
-    "kind", "message_id",
-]
-KINDS = ("initial", "follow_up_1", "follow_up_2")
+SENT_LOG_FIELDS = ["sent_at", "to_email", "partner_name", "partner_domain", "competitor_name", "subject", "status", "error"]
 
 # ---- Choosing who to write to ---------------------------------------------
 # Only addresses that nobody reads, or that look broken, are dropped. Everything
@@ -79,6 +72,11 @@ _ROLE_SCORES = (
 _NAMED_PERSON_SCORE = 40
 _LOW_PRIORITY_SCORE = 10
 
+BIG_PLATFORM_DOMAINS = {
+    "google.com", "microsoft.com", "apple.com", "amazon.com", "meta.com", "facebook.com",
+    "stripe.com", "paypal.com", "zapier.com", "mailchimp.com", "salesforce.com", "hubspot.com",
+    "slack.com", "zoom.us", "intuit.com", "quickbooks.com", "twilio.com", "shopify.com",
+}
 FREE_MAIL_DOMAINS = {"gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "icloud.com", "aol.com"}
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._%+\-]*@([A-Za-z0-9\-]+\.)+[A-Za-z]{2,}$")
 
@@ -194,35 +192,14 @@ def _sent_today_count() -> int:
     return sum(1 for r in _read_sent_log() if r.get("status") == "sent" and (r.get("sent_at") or "").startswith(today))
 
 
-def _upgrade_sent_log() -> None:
-    """Older logs lack the kind/message_id columns: rewrite them once with the
-    current header (old rows count as initial emails) so appends stay aligned."""
-    if not SENT_LOG.exists():
-        return
-    with SENT_LOG.open(newline="", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        header = reader.fieldnames or []
-        if header == SENT_LOG_FIELDS:
-            return
-        rows = list(reader)
-    with SENT_LOG.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=SENT_LOG_FIELDS, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            row.setdefault("kind", "initial")
-            row["kind"] = row.get("kind") or "initial"
-            writer.writerow({k: row.get(k, "") for k in SENT_LOG_FIELDS})
-
-
 def _append_sent_log(entry: dict) -> None:
     OUTREACH_DIR.mkdir(parents=True, exist_ok=True)
-    _upgrade_sent_log()
     new_file = not SENT_LOG.exists()
     with SENT_LOG.open("a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=SENT_LOG_FIELDS, extrasaction="ignore")
+        writer = csv.DictWriter(f, fieldnames=SENT_LOG_FIELDS)
         if new_file:
             writer.writeheader()
-        writer.writerow({k: entry.get(k, "") for k in SENT_LOG_FIELDS})
+        writer.writerow(entry)
 
 
 # ---- Reading leads ----------------------------------------------------------
@@ -242,18 +219,10 @@ def select_leads(
     include_guessed: bool = False,
     skip_big_platforms: bool = False,
     limit: int | None = None,
-    all_addresses: bool = False,
-    store=None,
 ) -> tuple[list[tuple[dict, list[str]]], list[tuple[str, str]]]:
     """Returns ([(row, [emails to write to]), ...], [(partner, why_skipped), ...]).
     A row is only skipped for a concrete reason, and every skip is reported --
-    including rows never reached because of `limit`.
-
-    One email per company by default, to its best address (identical emails to
-    three inboxes at one company read as spam); the other good addresses are kept
-    on the row as `_backup_emails`. `all_addresses=True` writes to up to 3.
-    With a lead `store`, leads that replied, booked a meeting, became partners,
-    opted out or bounced are skipped."""
+    including rows never reached because of `limit`."""
     suppressed = load_suppression()
     contacted_emails, contacted_domains = load_contacted()
     chosen: list[tuple[dict, list[str]]] = []
@@ -292,17 +261,9 @@ def select_leads(
         if (domain and domain in seen_domains) or all(e in seen_emails for e in emails):
             skipped.append((partner, "duplicate of another row in this list"))
             continue
-        if store is not None:
-            lead = store.find(domain=domain) if domain else store.find(email=emails[0])
-            if lead and lead["status"] in NO_OUTREACH_STATUSES:
-                skipped.append((partner, f"lead is already '{lead['status']}' in the lead memory"))
-                continue
         seen_emails.update(emails)
         if domain:
             seen_domains.add(domain)
-        if not all_addresses and len(emails) > 1:
-            row = {**row, "_backup_emails": "; ".join(emails[1:])}
-            emails = emails[:1]
         chosen.append((row, emails))
         if limit and len(chosen) >= limit:
             left = len(rows) - index - 1
@@ -371,10 +332,8 @@ _FIT_SYSTEM_PROMPT = (
 )
 
 
-def check_fit(row: dict, research: str) -> tuple[bool | None, str]:
-    """(suitable, reason). Cheap deterministic checks first, then the model.
-    suitable is None when the check itself couldn't run (API error): that is not
-    a "not a fit" verdict, and the partner is retried on the next drafting run."""
+def check_fit(row: dict, research: str) -> tuple[bool, str]:
+    """(suitable, reason). Cheap deterministic checks first, then the model."""
     own = registrable_domain(row.get("website") or "")
     competitor_site = registrable_domain(row.get("competitor_website") or "")
     if own and competitor_site and own == competitor_site:
@@ -387,8 +346,8 @@ def check_fit(row: dict, research: str) -> tuple[bool | None, str]:
         f"Homepage text:\n{research or '(unavailable)'}\n\n"
         'Respond as JSON: {"suitable": true or false, "reason": "one short sentence"}',
     )
-    if not result or "suitable" not in result:
-        return None, "the fit check couldn't run (AI service error) -- will retry on the next draft run"
+    if not result:
+        return False, "fit check unavailable"
     return bool(result.get("suitable")), str(result.get("reason", "")).strip()
 
 
@@ -399,21 +358,9 @@ def draft_email(row: dict) -> tuple[dict | None, str]:
     relates to Waresport, writes the pitch and fact-checks it. The draft dict
     has subject, body, research_summary, analysis and sources."""
     suitable, why = check_fit(row, _research_homepage(row))
-    if suitable is None:
-        return None, why
     if not suitable:
         return None, f"not a fit: {why}"
     return deep_dive.build_draft(row, _validate_draft)
-
-
-def write_drafts(drafts: list[dict], prefix: str = "drafts") -> Path:
-    OUTREACH_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = OUTREACH_DIR / f"{prefix}_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.csv"
-    with out_path.open("w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=DRAFT_FIELDS, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(drafts)
-    return out_path
 
 
 def create_drafts(
@@ -422,8 +369,6 @@ def create_drafts(
     limit: int | None = 25,
     include_guessed: bool = False,
     skip_big_platforms: bool = False,
-    all_addresses: bool = False,
-    store=None,
 ) -> Path | None:
     if not llm_client.available():
         print("[outreach] OpenAI isn't configured -- drafting needs OPENAI_API_KEY in .env")
@@ -431,8 +376,7 @@ def create_drafts(
 
     rows = load_rows(leads_csv)
     chosen, skipped = select_leads(
-        rows, include_guessed=include_guessed, skip_big_platforms=skip_big_platforms, limit=limit,
-        all_addresses=all_addresses, store=store,
+        rows, include_guessed=include_guessed, skip_big_platforms=skip_big_platforms, limit=limit
     )
     print(f"[outreach] {len(rows)} rows in {leads_csv.name}: {len(chosen)} eligible, {len(skipped)} skipped")
     for partner, why in skipped:
@@ -456,20 +400,18 @@ def create_drafts(
             "research_summary": draft["research_summary"] if draft else "",
             "analysis": draft["analysis"] if draft else "",
             "sources": draft["sources"] if draft else "",
-            "kind": "initial",
-            "in_reply_to": "",
-            "backup_emails": row.get("_backup_emails", ""),
         })
-        if draft and store is not None:
-            key = store.ensure(name=partner, website=row.get("website") or "", emails=emails, competitor=row.get("competitor_name", ""))
-            if key:
-                store.set_status(key, "drafted", detail=f"Drafted to {emails[0]}")
 
     if not drafts:
         print("[outreach] nothing to draft")
         return None
 
-    out_path = write_drafts(drafts)
+    OUTREACH_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = OUTREACH_DIR / f"drafts_{datetime.now().strftime('%Y-%m-%d_%H%M')}.csv"
+    with out_path.open("w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=DRAFT_FIELDS)
+        writer.writeheader()
+        writer.writerows(drafts)
 
     ok = sum(1 for d in drafts if d["status"] == "draft")
     print(f"\n[outreach] wrote {ok} drafts ({len(drafts) - ok} failed) to {out_path}")
@@ -535,262 +477,18 @@ def build_full_body(body: str, cfg: OutreachConfig) -> str:
     return f"{body.rstrip()}\n\n{signature}\n\n--\n{footer}\n"
 
 
-def build_message(to_email: str, subject: str, body: str, cfg: OutreachConfig, in_reply_to: str = "") -> EmailMessage:
-    """`in_reply_to` (the earlier email's Message-ID) threads a follow-up under it."""
+def build_message(to_email: str, subject: str, body: str, cfg: OutreachConfig) -> EmailMessage:
     msg = EmailMessage()
     msg["From"] = formataddr((cfg.sender_name, cfg.from_email))
     msg["To"] = to_email
     msg["Subject"] = subject
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid(domain=cfg.from_email.split("@", 1)[-1])
-    if in_reply_to:
-        msg["In-Reply-To"] = in_reply_to
-        msg["References"] = in_reply_to
     reply_to = cfg.reply_to or cfg.from_email
     msg["Reply-To"] = reply_to
     msg["List-Unsubscribe"] = f"<mailto:{reply_to}?subject=unsubscribe>"
     msg.set_content(build_full_body(body, cfg))
     return msg
-
-
-# ---- Follow-ups ---------------------------------------------------------------
-# Days after the first email: follow-up 1, then follow-up 2 (the last one).
-DEFAULT_FOLLOW_UP_DAYS = (4, 9)
-
-
-def _parse_sent_at(value: str) -> datetime | None:
-    try:
-        return datetime.strptime((value or "").strip(), "%Y-%m-%d %H:%M:%S")
-    except ValueError:
-        return None
-
-
-def follow_up_body(kind: str, partner: str, first_sent: datetime) -> str:
-    """Short, deterministic follow-up text (no AI, so no new claims to fact-check).
-    Signature, postal address and opt-out are added at send time."""
-    site = _company_site()
-    company = os.environ.get("OUTREACH_COMPANY", "Waresport").strip() or "Waresport"
-    when = first_sent.strftime("%B %d").replace(" 0", " ")
-    if kind == "follow_up_1":
-        return (
-            f"Hi {partner} team,\n\n"
-            f"I wanted to follow up on my note from {when} about a possible partnership between {partner} and {company} ({site}). "
-            "I know inboxes get busy, so here is the short version: we run registrations, scheduling, payments and member "
-            f"communication for youth and multi-sport clubs, and we think what {partner} offers could be genuinely useful to those clubs.\n\n"
-            "Would a 15-minute call in the next couple of weeks be worth it? If someone else on your team handles partnerships, "
-            "I'd be grateful if you could point me to them."
-        )
-    return (
-        f"Hi {partner} team,\n\n"
-        f"One last note from me on this. If a partnership with {company} ({site}) isn't a priority right now, that's completely fine, "
-        "and I won't follow up again.\n\n"
-        "If it might be later, just reply with a good time and I'll send a short overview first."
-    )
-
-
-# A first email older than this gets no follow-ups (a "following up" note weeks later reads oddly).
-DEFAULT_FOLLOW_UP_MAX_AGE_DAYS = 30
-
-
-def due_follow_ups(
-    *,
-    now: datetime | None = None,
-    days: tuple[int, int] = DEFAULT_FOLLOW_UP_DAYS,
-    store=None,
-    max_age_days: int = DEFAULT_FOLLOW_UP_MAX_AGE_DAYS,
-) -> list[dict]:
-    """Follow-up drafts due now: ONE per company whose emails got no reply, to the
-    best address it was emailed at, threaded on that conversation. Skips anyone
-    suppressed, and (with a store) leads that replied, booked a meeting, opted out
-    or bounced. Each company gets at most two follow-ups."""
-    now = now or datetime.now()
-    suppressed = load_suppression()
-    by_company: dict[str, list[dict]] = {}
-    for row in _read_sent_log():
-        if row.get("status") != "sent" or not row.get("to_email"):
-            continue
-        company = (row.get("partner_domain") or _email_domain(row["to_email"]) or row["to_email"]).lower()
-        by_company.setdefault(company, []).append(row)
-
-    due = []
-    for domain, rows in by_company.items():
-        rows.sort(key=lambda r: r.get("sent_at") or "")
-        kinds = [r.get("kind") or "initial" for r in rows]
-        initials = [r for r, k in zip(rows, kinds) if k == "initial"]
-        if not initials or "follow_up_2" in kinds:
-            continue
-        initial = initials[0]
-        first_sent = _parse_sent_at(initial["sent_at"])
-        if not first_sent or now - first_sent > timedelta(days=max_age_days + days[1]):
-            continue
-        next_kind, after_days = ("follow_up_2", days[1]) if "follow_up_1" in kinds else ("follow_up_1", days[0])
-        if now - first_sent < timedelta(days=after_days):
-            continue
-        if next_kind == "follow_up_1" and now - first_sent > timedelta(days=max_age_days):
-            continue
-        # The best address this company was emailed at, still allowed.
-        addresses = sorted({r["to_email"].lower() for r in rows}, key=_score_email, reverse=True)
-        addresses = [a for a in addresses if not _is_suppressed(a, domain, suppressed)]
-        if not addresses:
-            continue
-        email = addresses[0]
-        thread = [r for r in rows if r["to_email"].lower() == email]
-        if store is not None:
-            lead = store.find(domain=domain) if domain else store.find(email=email)
-            if lead and lead["status"] in NO_OUTREACH_STATUSES:
-                continue
-        partner = initial.get("partner_name") or domain
-        subject = initial.get("subject") or ""
-        due.append({
-            "approved": "",
-            "to_email": email,
-            "partner_name": partner,
-            "partner_website": f"https://{domain}" if domain else "",
-            "competitor_name": initial.get("competitor_name", ""),
-            "email_confidence": "",
-            "subject": subject if subject.lower().startswith("re:") else f"Re: {subject}",
-            "body": follow_up_body(next_kind, partner, first_sent),
-            "status": "draft",
-            "research_summary": "",
-            "analysis": f"No reply {(now - first_sent).days} days after the first email.",
-            "sources": "",
-            "kind": next_kind,
-            "in_reply_to": thread[-1].get("message_id", ""),
-            "backup_emails": "",
-        })
-    return due
-
-
-def create_follow_up_drafts(
-    *, store=None, days: tuple[int, int] = DEFAULT_FOLLOW_UP_DAYS, max_age_days: int = DEFAULT_FOLLOW_UP_MAX_AGE_DAYS,
-) -> Path | None:
-    drafts = due_follow_ups(store=store, days=days, max_age_days=max_age_days)
-    if not drafts:
-        print("[outreach] no follow-ups are due")
-        return None
-    out_path = write_drafts(drafts, prefix="followups")
-    print(f"[outreach] wrote {len(drafts)} follow-up draft(s) to {out_path}")
-    print("Review them, put 'yes' in the approved column, then run the send step with --drafts on that file.")
-    return out_path
-
-
-def add_to_suppression(entry: str, reason: str = "") -> bool:
-    """Appends an email or domain to outreach/suppression.txt (once). True if added."""
-    entry = (entry or "").strip().lower()
-    if not entry or entry in load_suppression():
-        return False
-    OUTREACH_DIR.mkdir(parents=True, exist_ok=True)
-    with SUPPRESSION_FILE.open("a", encoding="utf-8") as f:
-        f.write(f"{entry}  # {reason or 'added automatically'} {datetime.now():%Y-%m-%d}\n")
-    return True
-
-
-def sync_inbox(store, *, fetch=None) -> dict:
-    """Reads replies and bounces from the sending inbox (read-only) and updates
-    the lead memory and suppression list. `fetch` is injectable for tests."""
-    from . import inbox
-
-    sent = [r for r in _read_sent_log() if r.get("status") == "sent" and r.get("to_email")]
-    if not sent:
-        print("[inbox] nothing has been sent yet")
-        return {"replies": 0, "opt_outs": 0, "bounces": 0, "auto_replies": 0}
-    import_sent_log(store)
-    contacted = {r["to_email"].lower() for r in sent}
-    contacted_domains = {(r.get("partner_domain") or _email_domain(r["to_email"])).lower() for r in sent} - {""}
-    first_sent = min(filter(None, (_parse_sent_at(r.get("sent_at", "")) for r in sent)), default=None)
-
-    if fetch is None:
-        cfg = OutreachConfig.from_env()
-        if not cfg.smtp_user or not cfg.smtp_password:
-            print("[inbox] set OUTREACH_FROM_EMAIL (or SMTP_USER) and SMTP_PASSWORD in .env first")
-            return {"replies": 0, "opt_outs": 0, "bounces": 0, "auto_replies": 0}
-        host = os.environ.get("IMAP_HOST", "imap.gmail.com").strip()
-
-        def fetch(**kw):
-            return inbox.fetch_events(host=host, user=cfg.smtp_user, password=cfg.smtp_password, **kw)
-
-    events = fetch(since=inbox.default_since(first_sent), contacted=contacted, contacted_domains=contacted_domains)
-    counts = {"replies": 0, "opt_outs": 0, "bounces": 0, "auto_replies": 0}
-    for event in events:
-        lead = store.find(email=event.address)
-        key = lead["key"] if lead else store.ensure(name="", emails=[event.address])
-        if event.kind == "bounce":
-            counts["bounces"] += 1
-            add_to_suppression(event.address, "bounced")
-            if key and store.set_status(key, "bounced", detail=f"Bounce for {event.address}: {event.subject}"):
-                print(f"  bounced: {event.address}")
-        elif event.kind == "opt_out":
-            counts["opt_outs"] += 1
-            add_to_suppression(_email_domain(event.address) or event.address, "asked not to be contacted")
-            if key and store.set_status(key, "not_interested", detail=f"{event.address}: {event.snippet}"):
-                print(f"  opted out: {event.address}")
-        elif event.kind == "reply":
-            counts["replies"] += 1
-            if key and store.set_status(key, "replied", detail=f"{event.address}: {event.snippet}"):
-                print(f"  replied: {event.address} -- \"{event.snippet[:80]}\"")
-        elif event.kind == "auto_reply":
-            counts["auto_replies"] += 1
-    print(f"[inbox] {counts['replies']} replies, {counts['opt_outs']} opt-outs, {counts['bounces']} bounces, "
-          f"{counts['auto_replies']} auto-replies ignored")
-    return counts
-
-
-def import_sent_log(store) -> int:
-    """Backfills the lead memory from the sent log (emails sent before the memory
-    existed): every company successfully emailed becomes at least 'contacted'."""
-    changed = 0
-    for row in _read_sent_log():
-        if row.get("status") != "sent" or not row.get("to_email"):
-            continue
-        domain = row.get("partner_domain") or _email_domain(row["to_email"])
-        key = store.ensure(name=row.get("partner_name", ""), website=f"https://{domain}" if domain else "",
-                           emails=[row["to_email"]], competitor=row.get("competitor_name", ""))
-        if key and store.set_status(key, "contacted", detail=f"Emailed {row['to_email']} on {row.get('sent_at', '')[:10]}"):
-            changed += 1
-    return changed
-
-
-# ---- Report ---------------------------------------------------------------------
-RESPONDED = frozenset({"replied", "meeting", "partner", "not_interested"})
-POSITIVE = frozenset({"replied", "meeting", "partner"})
-
-
-def outreach_report(store=None) -> dict:
-    """The numbers outreach is judged by: companies contacted, reply and meeting
-    rates, bounces, follow-ups sent and due."""
-    sent = [r for r in _read_sent_log() if r.get("status") == "sent"]
-    initial = [r for r in sent if (r.get("kind") or "initial") == "initial"]
-    domains = {(r.get("partner_domain") or _email_domain(r.get("to_email", ""))).lower() for r in initial}
-    domains.discard("")
-    statuses = {}
-    if store is not None:
-        for d in domains:
-            lead = store.find(domain=d)
-            if lead:
-                statuses[d] = lead["status"]
-    count = lambda wanted: sum(1 for s in statuses.values() if s in wanted)  # noqa: E731
-    contacted = len(domains)
-    responded, positive = count(RESPONDED), count(POSITIVE)
-    rate = lambda n: round(100 * n / contacted) if contacted else None  # noqa: E731
-    report = {
-        "companies_contacted": contacted,
-        "emails_sent": len(initial),
-        "follow_ups_sent": len(sent) - len(initial),
-        "responded": responded,
-        "response_rate": rate(responded),
-        "positive_replies": positive,
-        "positive_rate": rate(positive),
-        "meetings": count({"meeting", "partner"}),
-        "partners": count({"partner"}),
-        "not_interested": count({"not_interested"}),
-        "bounced": count({"bounced"}),
-        "bounce_rate": rate(count({"bounced"})),
-        "follow_ups_due": len(due_follow_ups(store=store)),
-    }
-    if store is not None:
-        report["leads_by_status"] = store.status_counts()
-        report["new_leads_last_7_days"] = store.count_first_seen_since(datetime.now() - timedelta(days=7))
-    return report
 
 
 def _connect(cfg: OutreachConfig) -> smtplib.SMTP:
@@ -816,7 +514,6 @@ def send_drafts(
     dry_run: bool = False,
     delay: float = 45.0,
     confirm: bool = True,
-    store=None,
 ) -> None:
     cfg = OutreachConfig.from_env()
     real_send = not test_to and not dry_run
@@ -846,29 +543,17 @@ def send_drafts(
         print(f"[outreach] today's cap of {cfg.daily_cap} sends is already used up -- try again tomorrow")
         return
 
-    already_sent = {(r.get("to_email", "").lower(), r.get("kind") or "initial") for r in _read_sent_log() if r.get("status") == "sent"}
     queue = []
     for d in to_send:
-        kind = d.get("kind") or "initial"
         partner_domain = registrable_domain(d.get("partner_website") or "")
         for email in [e.strip() for e in d["to_email"].split(";") if "@" in e]:
             domain = partner_domain or _email_domain(email)
-            if kind == "initial":
-                if real_send and (email.lower() in contacted_emails or (domain and domain in contacted_domains)):
-                    print(f"  skip {d['partner_name']} <{email}>: already contacted")
-                    continue
-            elif real_send and (email.lower(), kind) in already_sent:
-                # A follow-up goes to someone already contacted on purpose -- but only once per stage.
-                print(f"  skip {d['partner_name']} <{email}>: this follow-up was already sent")
+            if real_send and (email.lower() in contacted_emails or (domain and domain in contacted_domains)):
+                print(f"  skip {d['partner_name']} <{email}>: already contacted")
                 continue
             if _is_suppressed(email, domain, suppressed):
                 print(f"  skip {d['partner_name']} <{email}>: on the suppression list")
                 continue
-            if store is not None:
-                lead = store.find(domain=domain) if domain else store.find(email=email)
-                if lead and lead["status"] in NO_OUTREACH_STATUSES:
-                    print(f"  skip {d['partner_name']} <{email}>: lead is already '{lead['status']}'")
-                    continue
             queue.append((d, email, domain))
     queue = queue[:limit]
     if not queue:
@@ -894,15 +579,12 @@ def send_drafts(
     sent = 0
     for i, (d, email, domain) in enumerate(queue, 1):
         recipient = test_to or email
-        kind = d.get("kind") or "initial"
         subject = d["subject"] if not test_to else f"[TEST for {email}] {d['subject']}"
-        status, error, message_id = "sent", "", ""
+        status, error = "sent", ""
         try:
             if server is None:
                 server = _connect(cfg)
-            msg = build_message(recipient, subject, d["body"], cfg, in_reply_to=d.get("in_reply_to", ""))
-            message_id = msg["Message-ID"]
-            server.send_message(msg)
+            server.send_message(build_message(recipient, subject, d["body"], cfg))
             sent += 1
             print(f"  [{i}/{len(queue)}] sent -> {recipient} ({d['partner_name']})")
         except smtplib.SMTPAuthenticationError as e:
@@ -918,15 +600,8 @@ def send_drafts(
                 "sent_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "to_email": email, "partner_name": d["partner_name"], "partner_domain": domain,
                 "competitor_name": d.get("competitor_name", ""), "subject": d["subject"],
-                "status": status, "error": error, "kind": kind, "message_id": message_id if status == "sent" else "",
+                "status": status, "error": error,
             })
-            if status == "sent" and store is not None:
-                key = store.ensure(name=d["partner_name"], website=d.get("partner_website") or (f"https://{domain}" if domain else ""),
-                                   emails=[email], competitor=d.get("competitor_name", ""))
-                if key and kind == "initial":
-                    store.set_status(key, "contacted", detail=f"Emailed {email}")
-                elif key:
-                    store.add_event(key, kind, f"Follow-up sent to {email}")
         if i < len(queue):
             time.sleep(delay * random.uniform(0.8, 1.4))
 

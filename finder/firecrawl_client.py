@@ -18,10 +18,10 @@ Upstream of this file, discovery.py/page_fetch.py already do the "don't call
 Firecrawl unless needed" work: common URL paths are tried directly first, and
 a free `requests` fetch is tried before Firecrawl's scrape (see
 page_fetch.py) -- Firecrawl's scrape is reserved for pages that actually need
-JS rendering or hit anti-bot measures. Firecrawl's search() is only a
-fallback for when DuckDuckGo returns nothing (see search.py). This file's job
-is to make each call itself robust and coordinated, not to change when a call
-happens.
+JS rendering or hit anti-bot measures. Firecrawl's own search() IS the
+primary search backend (there's no other search API in this app). This
+file's job is to make each call itself robust and coordinated, not to change
+when a call happens.
 
 Configuration (env vars, all optional -- defaults are conservative for a
 free-tier Firecrawl account):
@@ -203,8 +203,8 @@ def search(query: str, limit: int = 5) -> list[dict]:
 
     Empty list on any failure (missing key, network error, retries
     exhausted) rather than raising -- callers should treat search as
-    optional, not a hard dependency. Only called through search.web_search,
-    as the fallback when DuckDuckGo comes back empty.
+    optional, not a hard dependency. This is the app's only search backend
+    (discovery.py and enrich.py both call this directly).
     """
     cache_key = f"search::{query}::{limit}"
     cached = _cache_get(cache_key)

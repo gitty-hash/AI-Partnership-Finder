@@ -9,6 +9,3 @@ venv/
 logs/
 outreach/
 secrets/
-# Lead memory (finder/lead_store.py): partner contacts and outreach status
-data/
-.pytest_cache/

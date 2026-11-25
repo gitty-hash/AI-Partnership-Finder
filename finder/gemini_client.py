@@ -95,7 +95,7 @@ def discover_competitors(product_description: str, known_names: list[str], count
 def pick_best_website(company_name: str, context: str, search_results: list[dict]) -> str:
     if not search_results:
         return ""
-    listing = "\n".join(f"{i+1}. {r['url']} -- {r.get('title') or ''} -- {(r.get('description') or '')[:150]}" for i, r in enumerate(search_results))
+    listing = "\n".join(f"{i+1}. {r['url']} -- {r.get('title', '')} -- {r.get('description', '')[:150]}" for i, r in enumerate(search_results))
     system = "You verify company identities from search results. Be skeptical: a similarly-named but unrelated company is a common trap."
     user = (
         f"Company: {company_name}\n"
@@ -146,14 +146,6 @@ def extract_partners(competitor_name: str, page_markdown: str) -> list[dict]:
         return []
     partners = result.get("partners", [])
     return [p for p in partners if isinstance(p, dict) and p.get("name")]
-
-
-def score_partner_fit(product_description: str, competitor_name: str, partners: list[dict]) -> list[dict]:
-    """Same contract as openai_client.score_partner_fit (prompt shared, only the transport differs)."""
-    from . import openai_client as _oa
-    if not partners:
-        return []
-    return _oa.parse_fit_result(_json_call(*_oa.build_fit_prompt(product_description, competitor_name, partners)))
 
 
 def describe_company(company_name: str, website: str, page_text: str) -> str:
