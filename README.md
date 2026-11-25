@@ -10,7 +10,7 @@ It runs locally on your machine, and everything is scheduled to run twice a week
 
 ## Sales team quick start (no coding needed)
 
-This section is for sales agents. Do **Steps 1 to 3 once** on your own computer. After that, only repeat **Steps 4 and 5**. You only change **one file** (called `.env`). You never edit the code.
+This section is for sales agents. Do **Steps 1 to 3 once** on your own computer. After that, only repeat **Steps 4 to 9**. You only change **one file** (called `.env`). You never edit the code.
 
 **Your checklist. Change all of these before you send anything:**
 - [ ] Your name (instead of the previous agent's): `OUTREACH_SENDER_NAME`
@@ -67,34 +67,118 @@ Google does not let programs use your normal password, so you create a separate 
 3. Search for **App passwords**, create one (name it `Waresport`), and copy the 16 letters Google shows you.
 4. In the blue window, type `python send_outreach.py setup` and press Enter. Paste the 16 letters (you will not see them as you type) and press Enter. It saves them into `.env` for you.
 
-### Step 4. Find partners
+### The whole process in one picture
+
+Once Steps 1 to 3 are done, this is what you do each time:
+
+```mermaid
+flowchart TD
+    A["STEP 4: FIND PARTNERS<br/>Run: python main.py --no-drive"] --> B["You get the partner sheet<br/>output folder: leads_DATE.csv"]
+    B --> C["STEP 5: WRITE THE EMAILS<br/>Run: python send_outreach.py draft<br/>Nothing is sent"]
+    C --> D["You get the email drafts<br/>outreach folder: drafts_DATE_TIME.csv"]
+    D --> E["STEP 6: READ AND APPROVE in Excel<br/>Fix mistakes, type yes in the approved column<br/>Save and close Excel"]
+    E --> F["STEP 7: PREVIEW AND TEST<br/>Run send with --dry-run, then with --test-to<br/>Partners get nothing"]
+    F --> G{"Does the test email<br/>in your inbox look right?"}
+    G -- "No" --> E
+    G -- "Yes" --> H["STEP 8: SEND FOR REAL<br/>Run the send command, then type SEND"]
+    H --> I["Emails go to the partner companies<br/>Recorded in outreach folder: sent_log.csv"]
+    I --> J["STEP 9: CHECK YOUR GMAIL<br/>for replies and bounced emails"]
 ```
+
+**Only two files are ever run:**
+
+| File | What it does | Does it send emails? |
+|---|---|---|
+| `main.py` | Finds partner companies and makes the Excel sheet | **No, never** |
+| `send_outreach.py` | `draft` writes the emails. `send` sends the ones you approved | **Only with `send`**, and only after you type `SEND` |
+
+Making the Excel sheet does **not** send any emails. Sending is always a separate step that you start yourself.
+
+### Before each session: open the terminal
+1. Open the project folder (the one with `main.py` in it).
+2. Click the address bar at the top of the window, type `powershell`, and press Enter.
+3. Paste one command at a time, press Enter, and wait until it finishes.
+
+### Step 4. Find partners and make the Excel sheet
+```powershell
 python main.py --no-drive
 ```
-This takes a while. When it ends, it prints the name of the spreadsheet it made. It is saved in the **`output`** folder and opens in Excel.
+- **Wait for it to finish.** It can take a long time. The sheet is only saved at the very end, so do not close the window.
+- **It is done when you see:** `Wrote ... rows to output\leads_DATE.csv`
+- **To open the sheet**, go to the `output` folder and double-click the newest `leads_` file.
 
-### Step 5. Write the emails, check them, then send
-Nothing is ever sent without your approval. Replace `<date_time>` and `NAME-OF-YOUR-FILE` below with the real file names in your folders.
+Running it twice on the same day replaces that day's sheet, so rename the first one if you want to keep it. For a quick trial run, use:
+```powershell
+python main.py --no-drive --max-competitors 2 --max-per-competitor 4
+```
 
-1. **Write drafts** (this sends nothing):
-   ```
-   python send_outreach.py draft --input output/NAME-OF-YOUR-FILE.csv
-   ```
-   It saves a file in the **`outreach`** folder called `drafts_<date_time>.csv`.
-2. **Read every email.** Open that file in Excel. Fix anything that sounds wrong or untrue. Type **`yes`** in the `approved` column on every email you want to send. Leave the others empty.
-3. **Practice run** (nothing is sent):
-   ```
-   python send_outreach.py send --drafts outreach/drafts_<date_time>.csv --dry-run
-   ```
-4. **Send yourself a test copy** (the partner gets nothing):
-   ```
-   python send_outreach.py send --drafts outreach/drafts_<date_time>.csv --test-to YOUR-OWN-EMAIL
-   ```
-   Check your inbox. Make sure your name, title and the footer look right.
-5. **Real send.** It asks you to type `SEND` before it goes out:
-   ```
-   python send_outreach.py send --drafts outreach/drafts_<date_time>.csv
-   ```
+### Step 5. Write the emails (nothing is sent)
+```powershell
+python send_outreach.py draft
+```
+- It uses your **newest** `leads_` sheet and writes up to 25 emails.
+- **It is done when you see:** `wrote ... drafts ... to ...drafts_DATE_TIME.csv`
+- Your drafts are in the `outreach` folder. **Write down the file name**, for example `drafts_2026-11-25_0930.csv`. You need it in Steps 7 and 8.
+
+To use a different sheet, put its name in the command:
+```powershell
+python send_outreach.py draft --input output/leads_2026-11-25.csv
+```
+
+### Step 6. Read and approve the emails
+1. Open the `outreach` folder and double-click your `drafts_` file. It opens in Excel.
+2. Look at these columns:
+
+| Column | What to do |
+|---|---|
+| `to_email` | Check the address looks right. Delete any address you do not want |
+| `subject` and `body` | Read every word. Fix anything wrong or untrue, such as "recent" news that is old |
+| `status` | Only rows that say `draft` can be sent. Leave the others alone |
+| `approved` | Type **`yes`** to send this email. **Leave it empty** to not send it |
+
+3. **Save** the file (Ctrl + S). If Excel asks for a file type, choose **CSV UTF-8**. Then **close Excel**.
+
+**To email just one company,** type `yes` on that row only.
+
+### Step 7. Preview and test (partners get nothing)
+> In the commands below, replace `drafts_2026-11-25_0930.csv` with **your** file name. Shortcut: type `outreach\drafts_` and press **Tab** to fill in the name (press Tab again for the next file).
+
+**7a. Preview on screen.** Nothing is sent:
+```powershell
+python send_outreach.py send --drafts outreach/drafts_2026-11-25_0930.csv --dry-run
+```
+**7b. Send the approved emails to yourself.** Replace `you@example.com` with your own email:
+```powershell
+python send_outreach.py send --drafts outreach/drafts_2026-11-25_0930.csv --test-to you@example.com
+```
+Open your inbox and check the subject, your name, your job title and the address at the bottom. If something is wrong, go back to Step 6 (or fix `.env` if it is your name, title or address).
+
+The preview and the test can still show companies you have already emailed. The real send in Step 8 skips them.
+
+### Step 8. Send to the real partner companies
+> **Stop and check:** this command sends real emails, and they cannot be taken back.
+
+```powershell
+python send_outreach.py send --drafts outreach/drafts_2026-11-25_0930.csv
+```
+- It tells you how many emails will go out. Type **`SEND`** (capital letters) and press Enter. Anything else cancels.
+- It waits about 45 seconds between emails, so 25 emails take around 20 minutes. Do not close the window.
+- **It is done when you see:** `done: ... of ... sent`
+
+### Step 9. After sending
+1. Check your Gmail inbox for **replies**, and for **bounced** emails (a message saying the address was not found).
+2. If someone says "no thanks", open `outreach/suppression.txt` in Notepad (create it if it is not there) and add their email address on a new line.
+
+### All the commands on one page
+
+| Step | Command | Sends to partners? |
+|---|---|---|
+| 4. Find partners | `python main.py --no-drive` | No |
+| 5. Write emails | `python send_outreach.py draft` | No |
+| 6. Approve | Open the drafts file in Excel and type `yes` | No |
+| 7a. Preview | `python send_outreach.py send --drafts outreach/YOUR-FILE.csv --dry-run` | No |
+| 7b. Test on yourself | `python send_outreach.py send --drafts outreach/YOUR-FILE.csv --test-to YOUR-EMAIL` | No |
+| **8. Real send** | `python send_outreach.py send --drafts outreach/YOUR-FILE.csv` | **Yes** |
 
 ### Rules the tool follows for you
 - Every email subject includes the word **Waresport**.
@@ -110,6 +194,11 @@ Nothing is ever sent without your approval. Replace `<date_time>` and `NAME-OF-Y
 | `login failed ... use an App Password` | The Gmail password is wrong | Redo Step 3. It must be the 16-letter App Password |
 | `OpenAI isn't configured` | `OPENAI_API_KEY` is missing or wrong | Check that line in `.env` |
 | Emails are signed with another person's name | `OUTREACH_SENDER_NAME` was not changed | Fix it in `.env`, save it, then write the drafts again |
+| `No leads CSV found` | There is no partner sheet yet | Do Step 4 first, or give the sheet name with `--input` |
+| `Drafts file not found` | The drafts file name is wrong | Check the name in the `outreach` folder. Use the Tab shortcut in Step 7 |
+| `no approved drafts to send` | No row has `yes` in `approved`, or the file was not saved | Do Step 6 again, then save and close Excel |
+| `nothing left to send` | Those companies were already emailed, or are on the do-not-contact list | Nothing to fix. Draft emails for other companies |
+| `today's cap ... is already used up` | You reached 25 emails today | Try again tomorrow |
 | `'python' is not recognized` | Python is not installed correctly | Reinstall it and tick **"Add python.exe to PATH"** |
 
 **Keep your `.env` private.** It holds your passwords. Never email it, upload it to GitHub, or paste its contents into a chat. If you ever do, replace the keys straight away.
