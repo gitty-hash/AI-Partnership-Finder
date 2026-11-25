@@ -290,6 +290,8 @@ def _validate_draft(subject: str, body: str) -> str:
         return "subject is empty"
     if len(subject) > 80:
         return "subject is too long (keep it under 60 characters)"
+    if "waresport" not in subject.lower():
+        return 'subject must include the word "Waresport"'
     words = _word_count(body)
     if words < 130:
         return f"body is too short ({words} words; aim for 150-200)"

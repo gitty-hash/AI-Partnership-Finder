@@ -8,6 +8,112 @@ Finds partnership leads for [Waresport](https://www.waresport.com) (sports club 
 
 It runs locally on your machine, and everything is scheduled to run twice a week.(any day of week)
 
+## Sales team quick start (no coding needed)
+
+This section is for sales agents. Do **Steps 1 to 3 once** on your own computer. After that, only repeat **Steps 4 and 5**. You only change **one file** (called `.env`). You never edit the code.
+
+**Your checklist. Change all of these before you send anything:**
+- [ ] Your name (instead of the previous agent's): `OUTREACH_SENDER_NAME`
+- [ ] Your job title: `OUTREACH_SENDER_TITLE`
+- [ ] Your Gmail address: `OUTREACH_FROM_EMAIL`
+- [ ] Your Gmail App Password: `SMTP_PASSWORD`
+- [ ] The company postal address: `OUTREACH_MAILING_ADDRESS`
+- [ ] The OpenAI key: `OPENAI_API_KEY`
+- [ ] The Firecrawl key: `FIRECRAWL_API_KEY`
+
+Steps 2 and 3 show you how to fill in each one.
+
+> **Why this matters:** the emails go out under *your* name from *your* Gmail. If you skip a step, the emails could go out with the wrong name or address, or not send at all.
+
+### Step 1. Install the tools (one time)
+1. Install **Python** (version 3.10 or newer) from python.org. On the first install screen, tick **"Add python.exe to PATH"**.
+2. Download this project (green **Code** button on GitHub, then **Download ZIP**, then unzip it), or ask your technical teammate to do it.
+3. Open the unzipped folder. Click the address bar at the top of the window, type `powershell`, and press Enter. A blue window opens.
+4. Type this and press Enter (wait for it to finish):
+   ```
+   pip install -r requirements.txt
+   ```
+
+### Step 2. Create your `.env` file (the one file you change)
+1. In the project folder, find the file named **`.env.example`**.
+2. Make a copy of it and rename the copy to exactly **`.env`** (a dot, then `env`, nothing else).
+3. Open `.env` in Notepad and fill in the values below. **Everything after the `=` sign is yours to replace.** Do not put a space right after the `=`, and do not add quotes. Save the file when you are done.
+
+> **Windows tip:** if Notepad saves it as `.env.txt`, the tool will not find it. Choose **Save as type: All files** and name it `.env`.
+
+| Line in `.env` | What to put there | Where you get it |
+|---|---|---|
+| `OPENAI_API_KEY=` | The key that lets the tool research and write emails. Starts with `sk-` | Ask your manager, or create one at platform.openai.com > API keys |
+| `FIRECRAWL_API_KEY=` | The key that lets the tool read websites. Starts with `fc-` | Ask your manager, or create one at firecrawl.dev > API keys |
+| `OUTREACH_SENDER_NAME=` | **Your own full name.** This is the name signed on every email | You (for example `Priya Patel`) |
+| `OUTREACH_SENDER_TITLE=` | **Your own job title** | You (for example `Partnerships Manager`) |
+| `OUTREACH_FROM_EMAIL=` | **The Gmail address you send from.** Replies come back here | Your Gmail address |
+| `SMTP_PASSWORD=` | **A special 16-letter Gmail "App Password"**. It is NOT your normal Gmail password (see below) | Your Google account |
+| `OUTREACH_MAILING_ADDRESS=` | Waresport's real postal address. It is printed at the bottom of every email (the law requires it) | Ask your manager. **Replace the example text**, or it will be printed in your emails |
+| `GOOGLE_DRIVE_FOLDER_ID=` | Leave **empty** unless your manager set up Google Drive for you | Optional |
+
+When you are done, those lines should look like this (with your own details):
+```
+OUTREACH_SENDER_NAME=Priya Patel
+OUTREACH_SENDER_TITLE=Partnerships Manager
+OUTREACH_FROM_EMAIL=priya@example.com
+```
+**Do not leave any example text behind** (such as `Your Name` or `you@example.com`). The tool cannot tell it is an example, and would use it in a real email.
+
+### Step 3. Get your Gmail App Password (about 3 minutes)
+Google does not let programs use your normal password, so you create a separate 16-letter one.
+1. Go to **myaccount.google.com**, then **Security**.
+2. Sign in with the **same Gmail address** you put in `OUTREACH_FROM_EMAIL`. Turn on **2-Step Verification** if it is not already on.
+3. Search for **App passwords**, create one (name it `Waresport`), and copy the 16 letters Google shows you.
+4. In the blue window, type `python send_outreach.py setup` and press Enter. Paste the 16 letters (you will not see them as you type) and press Enter. It saves them into `.env` for you.
+
+### Step 4. Find partners
+```
+python main.py --no-drive
+```
+This takes a while. When it ends, it prints the name of the spreadsheet it made. It is saved in the **`output`** folder and opens in Excel.
+
+### Step 5. Write the emails, check them, then send
+Nothing is ever sent without your approval. Replace `<date_time>` and `NAME-OF-YOUR-FILE` below with the real file names in your folders.
+
+1. **Write drafts** (this sends nothing):
+   ```
+   python send_outreach.py draft --input output/NAME-OF-YOUR-FILE.csv
+   ```
+   It saves a file in the **`outreach`** folder called `drafts_<date_time>.csv`.
+2. **Read every email.** Open that file in Excel. Fix anything that sounds wrong or untrue. Type **`yes`** in the `approved` column on every email you want to send. Leave the others empty.
+3. **Practice run** (nothing is sent):
+   ```
+   python send_outreach.py send --drafts outreach/drafts_<date_time>.csv --dry-run
+   ```
+4. **Send yourself a test copy** (the partner gets nothing):
+   ```
+   python send_outreach.py send --drafts outreach/drafts_<date_time>.csv --test-to YOUR-OWN-EMAIL
+   ```
+   Check your inbox. Make sure your name, title and the footer look right.
+5. **Real send.** It asks you to type `SEND` before it goes out:
+   ```
+   python send_outreach.py send --drafts outreach/drafts_<date_time>.csv
+   ```
+
+### Rules the tool follows for you
+- Every email subject includes the word **Waresport**.
+- It sends **at most 25 emails a day**, with a pause between each, so Gmail does not block you.
+- It can write to **up to 3 addresses** at one company. Delete any address you do not want from the `to_email` column in the drafts file.
+- Once a company has been emailed, **later runs skip it**. The record is in `outreach/sent_log.csv`, on **your computer only**. Before your first send, ask teammates for their `sent_log.csv` and put it in your `outreach` folder. If you already have one, add their rows to yours. Do not replace it, or the tool forgets who you emailed.
+- If someone replies "no thanks", add their email address (or company website) as a new line in `outreach/suppression.txt` so they are never contacted again.
+
+### If something goes wrong
+| What you see | What it means | What to do |
+|---|---|---|
+| `can't send -- set these in .env first: ...` | Something in Step 2 is empty | Fill in the lines it names |
+| `login failed ... use an App Password` | The Gmail password is wrong | Redo Step 3. It must be the 16-letter App Password |
+| `OpenAI isn't configured` | `OPENAI_API_KEY` is missing or wrong | Check that line in `.env` |
+| Emails are signed with another person's name | `OUTREACH_SENDER_NAME` was not changed | Fix it in `.env`, save it, then write the drafts again |
+| `'python' is not recognized` | Python is not installed correctly | Reinstall it and tick **"Add python.exe to PATH"** |
+
+**Keep your `.env` private.** It holds your passwords. Never email it, upload it to GitHub, or paste its contents into a chat. If you ever do, replace the keys straight away.
+
 ## How it works
 
 | Stage | Command | What happens |
@@ -100,7 +206,7 @@ python send_outreach.py send --drafts outreach/drafts_<time>.csv          # real
 How drafting works (per partner):
 1. **Pick addresses:** up to 3 trustworthy addresses per partner, each gets its own email. HR, support and press inboxes are kept (ranked last). Skipped, and printed with a reason: no email, unverified guessed addresses, broken or unrelated-domain addresses, duplicates, anyone already contacted, anyone in `outreach/suppression.txt`.
 2. **Fit check:** clear non-partners (clubs, leagues, associations, competitors) are skipped as `not a fit`.
-3. **Deep dive:** the brand's own pages and recent news are gathered; a fact sheet is built only from that evidence; the fit with Waresport is analyzed; a 150-200 word pitch is written; a fact-check pass rejects unsupported claims (rewrite once, otherwise no draft).
+3. **Deep dive:** the brand's own pages and recent news are gathered; a fact sheet is built only from that evidence; the fit with Waresport is analyzed; a 150-200 word pitch is written (signed with `OUTREACH_SENDER_NAME` / `OUTREACH_SENDER_TITLE` from `.env`, and the subject must contain "Waresport"); a fact-check pass rejects unsupported claims (rewrite once, otherwise no draft).
 4. **Review:** the drafts CSV shows the research summary, analysis and source URLs next to each email.
 5. **Send:** through Gmail, about 45 seconds apart, at most 25 a day. The signature, postal address and opt-out line are added by code. Every send is logged in `outreach/sent_log.csv`, so nobody is emailed twice.
 

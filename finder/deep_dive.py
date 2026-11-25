@@ -20,6 +20,7 @@ Everything cited is traceable: the drafts CSV records the research summary, the
 analysis and the source URLs next to each email so a human can check them.
 """
 import json
+import os
 import re
 from urllib.parse import urlparse
 
@@ -186,10 +187,10 @@ def analyze(name: str, facts: dict) -> dict | None:
 # ---- 4. Write ---------------------------------------------------------------
 _WRITE_SYSTEM = """You are a senior B2B partnerships marketer with 20+ years of experience in sports and club management software. You write genuine, well-reasoned business pitches that earn replies -- never mass-mailing copy.
 
-Write one partnership email from Sharaan Thayanithi, Senior Sales Agent at Waresport, to the target brand, from the research and analysis provided.
+Write one partnership email from {SENDER}, at Waresport, to the target brand, from the research and analysis provided.
 
 Requirements:
-- Subject: under 60 characters, specific to them (their name or what they do), never the generic "Partnership Opportunity with Waresport".
+- Subject: under 60 characters, must include the word "Waresport" and be specific to them (their name or what they do), never the generic "Partnership Opportunity with Waresport".
 - Body: 150 to 200 words, plain text, 4 short paragraphs:
   1. Open with something specific about their business that shows we did our homework (a real fact from the fact sheet).
   2. Briefly introduce Waresport (what it does, for whom), using only the Waresport facts, and mention the Waresport website once as plain text exactly as given.
@@ -200,6 +201,13 @@ Requirements:
 - Greet them as "Hi <Brand Name> team,". Do NOT write a sign-off, signature, postal address or unsubscribe text -- those are added automatically. The Waresport website is the only web address allowed in the body."""
 
 
+def _write_system() -> str:
+    """The writer prompt with the sender's name/title from .env (OUTREACH_SENDER_NAME / _TITLE)."""
+    name = os.environ.get("OUTREACH_SENDER_NAME", "").strip() or "a Waresport sales agent"
+    title = os.environ.get("OUTREACH_SENDER_TITLE", "").strip()
+    return _WRITE_SYSTEM.replace("{SENDER}", f"{name}, {title}" if title else name)
+
+
 def write(name: str, facts: dict, plan: dict, feedback: str = "") -> dict | None:
     user = (
         f"WARESPORT FACTS:\n{WARESPORT_FACTS}\n\nTARGET BRAND: {name}\nFACT SHEET:\n{_fact_sheet_text(facts)}\n\n"
@@ -207,7 +215,7 @@ def write(name: str, facts: dict, plan: dict, feedback: str = "") -> dict | None
         + (f"\nYour previous draft was rejected: {feedback}. Rewrite it and fix that.\n" if feedback else "")
         + '\nRespond as JSON: {"subject": "...", "body": "..."}'
     )
-    return llm_client._json_call(_WRITE_SYSTEM, user, max_chars=LONG_INPUT)
+    return llm_client._json_call(_write_system(), user, max_chars=LONG_INPUT)
 
 
 # ---- 5. Verify --------------------------------------------------------------

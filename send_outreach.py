@@ -21,6 +21,7 @@ Step 2 -- send:
 See README.md ("Outreach") for the .env settings sending needs.
 """
 import argparse
+import os
 from pathlib import Path
 
 from finder import gdrive, outreach
@@ -52,7 +53,8 @@ def cmd_setup(args: argparse.Namespace) -> None:
     import getpass
 
     env_path = Path(__file__).resolve().parent / ".env"
-    password = getpass.getpass("Gmail App Password for waresportproduct@gmail.com (typing is hidden): ").strip()
+    sender = os.environ.get("OUTREACH_FROM_EMAIL", "").strip() or "your sending Gmail address"
+    password = getpass.getpass(f"Gmail App Password for {sender} (typing is hidden): ").strip()
     password = password.replace(" ", "")  # Google shows it in 4 groups of 4
     if len(password) != 16 or not password.isalnum():
         print("That doesn't look like a Gmail App Password (16 letters/digits, e.g. 'abcd efgh ijkl mnop').")
