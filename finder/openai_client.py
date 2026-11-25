@@ -160,7 +160,7 @@ def pick_best_website(company_name: str, context: str, search_results: list[dict
     if none look right, rather than guessing."""
     if not search_results:
         return ""
-    listing = "\n".join(f"{i+1}. {r['url']} -- {r.get('title', '')} -- {r.get('description', '')[:150]}" for i, r in enumerate(search_results))
+    listing = "\n".join(f"{i+1}. {r['url']} -- {r.get('title') or ''} -- {(r.get('description') or '')[:150]}" for i, r in enumerate(search_results))
     system = "You verify company identities from search results. Be skeptical: a similarly-named but unrelated company is a common trap."
     user = (
         f"Company: {company_name}\n"

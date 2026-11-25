@@ -19,6 +19,16 @@ _cache: dict[tuple[str, int], list[dict]] = {}
 _cache_lock = threading.Lock()
 
 
+def _clean(results: list[dict]) -> list[dict]:
+    """Search backends can return null titles/descriptions (and old cached results
+    still hold them); callers rely on every field being a string."""
+    return [
+        {"title": r.get("title") or "", "url": r["url"], "description": r.get("description") or ""}
+        for r in results
+        if r.get("url")
+    ]
+
+
 def web_search(query: str, limit: int = 5) -> list[dict]:
     key = (query, limit)
     with _cache_lock:
@@ -34,6 +44,8 @@ def web_search(query: str, limit: int = 5) -> list[dict]:
 
     if not results and firecrawl_client.available():
         results = firecrawl_client.search(query, limit=limit)
+
+    results = _clean(results)
 
     if results:
         with _cache_lock:

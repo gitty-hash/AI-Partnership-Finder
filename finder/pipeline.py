@@ -56,7 +56,13 @@ def _enrich_all(partners: list[Partner], *, delay: float, workers: int, store: L
     def run(indexed):
         i, p = indexed
         print(f"    [{i}/{len(todo)}] looking up email for {p.name} -> {p.website or '(no website resolved)'}")
-        enrich(p, delay=delay)
+        try:
+            enrich(p, delay=delay)
+        except Exception as e:  # one bad site must not lose the rest of the run
+            print(f"    [warn] contact lookup failed for {p.name}: {type(e).__name__}: {e}")
+            p.emails, p.email_source = [], ""
+            p.email_confidence = "not_found"
+            p.notes = (p.notes + " " if p.notes else "") + "Contact lookup failed -- will be retried on the next run."
         time.sleep(delay)
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
@@ -205,10 +211,14 @@ def collect(
         competitor = queue.pop(0)
         tried.add(competitor["name"].lower())
         print(f"\n  === {competitor['name']} (competitors with partners so far: {collected}/{target_competitors}) ===")
-        kept = _process_competitor(
-            competitor, seen_keys, seen_names, seen_emails, delay, max_per_competitor, enrich_contacts,
-            store=store, reused=reused, workers=workers,
-        )
+        try:
+            kept = _process_competitor(
+                competitor, seen_keys, seen_names, seen_emails, delay, max_per_competitor, enrich_contacts,
+                store=store, reused=reused, workers=workers,
+            )
+        except Exception as e:  # keep everything collected so far and move on
+            print(f"    [warn] {competitor['name']} failed: {type(e).__name__}: {e}")
+            kept = []
         if kept:
             collected += 1
             partners.extend(kept)

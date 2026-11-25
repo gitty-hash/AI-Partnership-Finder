@@ -95,7 +95,7 @@ def discover_competitors(product_description: str, known_names: list[str], count
 def pick_best_website(company_name: str, context: str, search_results: list[dict]) -> str:
     if not search_results:
         return ""
-    listing = "\n".join(f"{i+1}. {r['url']} -- {r.get('title', '')} -- {r.get('description', '')[:150]}" for i, r in enumerate(search_results))
+    listing = "\n".join(f"{i+1}. {r['url']} -- {r.get('title') or ''} -- {(r.get('description') or '')[:150]}" for i, r in enumerate(search_results))
     system = "You verify company identities from search results. Be skeptical: a similarly-named but unrelated company is a common trap."
     user = (
         f"Company: {company_name}\n"

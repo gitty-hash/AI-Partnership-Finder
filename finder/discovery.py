@@ -264,12 +264,12 @@ def scrape_integrations_page(
 
     partners = []
     for item in extracted:
-        name = item.get("name", "").strip()
+        name = str(item.get("name") or "").strip()
         if not name or name.lower() in skip_names:
             continue
         skip_names = skip_names | {name.lower()}
-        category = item.get("category", "")
-        description = item.get("description", "")
+        category = str(item.get("category") or "")
+        description = str(item.get("description") or "")
         # Category/description are the disambiguating signal for a name that
         # maps to multiple unrelated real companies (e.g. "NCSA" is both a
         # college-recruiting platform AND the University of Illinois's
@@ -282,8 +282,8 @@ def scrape_integrations_page(
                 competitor=competitor_name,
                 competitor_website=competitor_website,
                 name=name,
-                category=item.get("category", ""),
-                description=item.get("description", ""),
+                category=category,
+                description=description,
                 source_url=page_url,
                 website=website,
                 website_confidence=confidence,
